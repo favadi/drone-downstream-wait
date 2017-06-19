@@ -64,9 +64,9 @@ func (p *Plugin) Exec() error {
 	)
 	client := drone.NewClient(p.Server, auth)
 
-	owner, repo, err := parseRepo(p.WaitRepo)
+	waitRepoOwner, waitRepoName, err := parseRepo(p.WaitRepo)
 	if err != nil {
-		return fmt.Errorf("invalid repository: %q", p.WaitRepo)
+		return fmt.Errorf("invalid wait repository: %q", p.WaitRepo)
 	}
 
 	// get current job number
@@ -74,7 +74,7 @@ func (p *Plugin) Exec() error {
 
 	// wait for other build processes to be completed and success before deploy
 	for {
-		build, err := client.Build(owner, repo, p.BuildNumber)
+		build, err := client.Build(waitRepoOwner, waitRepoName, p.BuildNumber)
 		if err != nil {
 			return err
 		}
@@ -102,12 +102,17 @@ func (p *Plugin) Exec() error {
 		time.Sleep(waitStep)
 	}
 
-	lb, err := client.BuildLast(owner, repo, p.DownstreamBranch)
+	downstreamRepoOwner, downstreamRepoName, err := parseRepo(p.DownstreamRepo)
+	if err != nil {
+		return fmt.Errorf("invalid downstream repository: %q", p.WaitRepo)
+	}
+
+	lb, err := client.BuildLast(downstreamRepoOwner, downstreamRepoName, p.DownstreamBranch)
 	if err != nil {
 		return err
 	}
 
-	nb, err := client.BuildFork(owner, p.DownstreamRepo, lb.Number, nil)
+	nb, err := client.BuildFork(downstreamRepoOwner, downstreamRepoName, lb.Number, nil)
 	if err != nil {
 		return err
 	}
