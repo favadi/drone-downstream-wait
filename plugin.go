@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -28,8 +29,51 @@ type Plugin struct {
 	DownstreamBranch string
 }
 
-// Exec runs the plugin.
-func (p *Plugin) Exec() error {
+// getBuildError returns and error if there is any build failure in
+// given build number. It returns nil if all builds (excludes itself)
+// success .
+func getBuildError(client drone.Client, repo string, buildNumber int) error {
+	waitRepoOwner, waitRepoName, err := parseRepo(repo)
+	if err != nil {
+		return fmt.Errorf("invalid wait repository: %q", repo)
+	}
+
+	// get current job number
+	curPid := currentJobPID()
+
+	for {
+		build, err := client.Build(waitRepoOwner, waitRepoName, buildNumber)
+		if err != nil {
+			return err
+		}
+
+		completed := true
+		for _, proc := range build.Procs {
+			if proc.PID == curPid {
+				// the build process is this plugin itself
+				continue
+			}
+
+			if proc.State == "success" {
+				continue
+			} else if proc.State == "failure" {
+				return fmt.Errorf("do not deploy, job failure: %d ", proc.PID)
+			} else {
+				log.Printf("job %d is not completed, state: %s", proc.PID, proc.State)
+				completed = false
+				break
+			}
+		}
+
+		// all builds success
+		if completed {
+			return nil
+		}
+		time.Sleep(waitStep)
+	}
+}
+
+func (p *Plugin) validateParams() error {
 	if len(p.Server) == 0 {
 		return errors.New("missing Drone server uri")
 	}
@@ -54,52 +98,26 @@ func (p *Plugin) Exec() error {
 		log.Printf("using default downstream branch: %q", defaultDownstreamBranch)
 		p.DownstreamBranch = defaultDownstreamBranch
 	}
+	return nil
+}
+
+// Exec runs the plugin.
+func (p *Plugin) Exec() error {
+	if err := p.validateParams(); err != nil {
+		return err
+	}
 
 	config := new(oauth2.Config)
 	auth := config.Client(
-		oauth2.NoContext,
+		context.Background(),
 		&oauth2.Token{
 			AccessToken: p.Token,
 		},
 	)
 	client := drone.NewClient(p.Server, auth)
 
-	waitRepoOwner, waitRepoName, err := parseRepo(p.WaitRepo)
-	if err != nil {
-		return fmt.Errorf("invalid wait repository: %q", p.WaitRepo)
-	}
-
-	// get current job number
-	curPid := currentJobPID()
-
-	// wait for other build processes to be completed and success before deploy
-	for {
-		build, err := client.Build(waitRepoOwner, waitRepoName, p.BuildNumber)
-		if err != nil {
-			return err
-		}
-
-		var toDeploy = true
-		for _, proc := range build.Procs {
-			if proc.PID == curPid {
-				continue
-			}
-
-			switch proc.State {
-			case "success":
-				continue
-			case "failure":
-				return fmt.Errorf("do not deploy, job failure: %s ", proc.PID)
-			default:
-				log.Printf("job %d is not completed, state: %s", proc.PID, proc.State)
-				toDeploy = false
-				break
-			}
-		}
-		if toDeploy {
-			break
-		}
-		time.Sleep(waitStep)
+	if err := getBuildError(client, p.WaitRepo, p.BuildNumber); err != nil {
+		return err
 	}
 
 	downstreamRepoOwner, downstreamRepoName, err := parseRepo(p.DownstreamRepo)
