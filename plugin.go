@@ -17,6 +17,7 @@ import (
 const (
 	waitStep                = time.Second * 5
 	defaultDownstreamBranch = "master"
+	startedBuildError       = "client error 409: Cannot re-start a started build"
 )
 
 // Plugin defines the deploy plugin parameters.
@@ -54,9 +55,9 @@ func getBuildError(client drone.Client, repo string, buildNumber int) error {
 				continue
 			}
 
-			if proc.State == "success" {
+			if proc.State == drone.StatusSuccess {
 				continue
-			} else if proc.State == "failure" {
+			} else if proc.State == drone.StatusFailure {
 				return fmt.Errorf("do not deploy, job failure: %d ", proc.PID)
 			} else {
 				log.Printf("job %d is not completed, state: %s", proc.PID, proc.State)
@@ -101,6 +102,21 @@ func (p *Plugin) validateParams() error {
 	return nil
 }
 
+func buildForkRetry(client drone.Client, owner, repo string, buildNumber int) error {
+	for {
+		if nb, err := client.BuildFork(owner, repo, buildNumber, nil); err == nil {
+			log.Printf("starting build: %d for %s/%s", nb.Number, owner, repo)
+			return nil
+		} else if err.Error() == startedBuildError {
+			log.Print(err)
+			break
+		} else {
+			return err
+		}
+	}
+	return nil
+}
+
 // Exec runs the plugin.
 func (p *Plugin) Exec() error {
 	if err := p.validateParams(); err != nil {
@@ -130,12 +146,10 @@ func (p *Plugin) Exec() error {
 		return err
 	}
 
-	nb, err := client.BuildFork(downstreamRepoOwner, downstreamRepoName, lb.Number, nil)
-	if err != nil {
+	if err = buildForkRetry(client, downstreamRepoOwner, downstreamRepoName, lb.Number); err != nil {
 		return err
 	}
 
-	log.Printf("starting build: %d for %s", nb.Number, p.DownstreamRepo)
 	return nil
 }
 
