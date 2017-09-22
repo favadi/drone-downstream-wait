@@ -5,5 +5,5 @@ RUN apk update && \
   ca-certificates && \
   rm -rf /var/cache/apk/*
 
-ADD drone-deploy /bin/
-ENTRYPOINT ["/bin/drone-deploy"]
+ADD drone-downstream-wait /bin/
+ENTRYPOINT ["/bin/drone-downstream-wait"]
